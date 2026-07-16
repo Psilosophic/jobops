@@ -1,0 +1,12 @@
+[
+  {
+    "id": "a1b2c3d4-0000-1111-2222-333344445555",
+    "text": "Identity Engineer",
+    "hostedUrl": "https://jobs.lever.co/exampleco/a1b2c3d4",
+    "createdAt": 1752480000000,
+    "workplaceType": "remote",
+    "categories": {"location": "Remote - US", "team": "Platform", "commitment": "Full-time"},
+    "descriptionPlain": "SAML OAuth OIDC Active Directory MFA RBAC federation troubleshooting",
+    "salaryRange": {"min": 120000, "max": 150000, "currency": "USD", "interval": "per-year-salary"}
+  }
+]

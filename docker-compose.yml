@@ -1,0 +1,84 @@
+name: jobops
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-jobops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    command: ["/entrypoint.sh", "api"]
+    env_file: .env
+    environment:
+      JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
+      JOBOPS_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8100:8000"          # LAN only; front with reverse proxy or Tailscale
+    volumes:
+      - exports:/srv/jobops/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["/entrypoint.sh", "worker"]
+    env_file: .env
+    environment:
+      JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
+      JOBOPS_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - exports:/srv/jobops/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build: ./backend
+    restart: unless-stopped
+    command: ["/entrypoint.sh", "scheduler"]
+    env_file: .env
+    environment:
+      JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
+      JOBOPS_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "8180:80"          # the UI — LAN only
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  exports:

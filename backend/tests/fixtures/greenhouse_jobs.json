@@ -1,0 +1,22 @@
+{
+  "jobs": [
+    {
+      "id": 4011001,
+      "absolute_url": "https://boards.greenhouse.io/exampleco/jobs/4011001",
+      "updated_at": "2026-07-14T09:00:00-06:00",
+      "title": "IAM Engineer (Remote - US)",
+      "location": {"name": "Remote - United States"},
+      "content": "<p>We need an IAM engineer with PingFederate, SAML, OAuth 2.0, OIDC, Active Directory and Entra ID experience. Salary $115,000 - $140,000.</p>",
+      "departments": [{"id": 1, "name": "Security"}]
+    },
+    {
+      "id": 4011002,
+      "absolute_url": "https://boards.greenhouse.io/exampleco/jobs/4011002",
+      "updated_at": "2026-07-10T09:00:00-06:00",
+      "title": "Technical Support Engineer",
+      "location": {"name": "Denver, Colorado"},
+      "content": "<p>Customer-facing troubleshooting, escalation management, SSO and Active Directory support.</p>",
+      "departments": [{"id": 2, "name": "Support"}]
+    }
+  ]
+}
