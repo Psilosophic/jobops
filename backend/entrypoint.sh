@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 if [ "$1" = "api" ]; then
+    python -m app.bootstrap
     alembic upgrade head
     python -m app.seeds
     exec uvicorn app.main:app --host 0.0.0.0 --port 8000
