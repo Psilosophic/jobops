@@ -29,7 +29,6 @@ services:
     build: ./backend
     restart: unless-stopped
     command: ["/entrypoint.sh", "api"]
-    env_file: .env
     environment:
       JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
       JOBOPS_REDIS_URL: redis://redis:6379/0
@@ -47,7 +46,6 @@ services:
     build: ./backend
     restart: unless-stopped
     command: ["/entrypoint.sh", "worker"]
-    env_file: .env
     environment:
       JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
       JOBOPS_REDIS_URL: redis://redis:6379/0
@@ -63,7 +61,6 @@ services:
     build: ./backend
     restart: unless-stopped
     command: ["/entrypoint.sh", "scheduler"]
-    env_file: .env
     environment:
       JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
       JOBOPS_REDIS_URL: redis://redis:6379/0
