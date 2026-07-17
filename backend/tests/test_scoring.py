@@ -130,3 +130,35 @@ def test_stale_posting_gets_zero_recency():
     p = posting(posted_at=datetime.now(timezone.utc) - timedelta(days=60))
     r = score_posting(p, profile(), [iam_pack()], salary_floor=80000, salary_target=110000)
     assert r.recency == 0.0
+
+
+def test_remote_india_rejected():
+    p = posting(location_raw="Remote - India", is_remote=True, remote_scope=None)
+    r = score_posting(p, profile(), [iam_pack()], salary_floor=80000, salary_target=110000)
+    assert r.location_match == 0.0
+    assert r.rejected
+    assert any("location" in x for x in r.reject_reasons)
+
+
+def test_remote_emea_rejected():
+    p = posting(location_raw="Remote (EMEA)", is_remote=True, remote_scope=None)
+    r = score_posting(p, profile(), [iam_pack()], salary_floor=80000, salary_target=110000)
+    assert r.location_match == 0.0
+
+
+def test_remote_us_explicit_accepted():
+    p = posting(location_raw="Remote - US", is_remote=True, remote_scope=None)
+    r = score_posting(p, profile(), [iam_pack()], salary_floor=80000, salary_target=110000)
+    assert r.location_match > 0
+
+
+def test_plain_remote_still_accepted():
+    p = posting(location_raw="Remote", is_remote=True, remote_scope=None)
+    r = score_posting(p, profile(), [iam_pack()], salary_floor=80000, salary_target=110000)
+    assert r.location_match > 0
+
+
+def test_remote_canada_rejected_even_with_scope():
+    p = posting(location_raw="Anywhere", is_remote=True, remote_scope="Canada")
+    r = score_posting(p, profile(), [iam_pack()], salary_floor=80000, salary_target=110000)
+    assert r.location_match == 0.0

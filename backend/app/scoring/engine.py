@@ -48,13 +48,55 @@ class ScoreResult:
     rationale: str = ""
 
 
+# Non-US country / region markers. If a remote posting names one of these and
+# gives no US signal, it is out of Colorado scope. Kept country/region level to
+# avoid false positives on US city names.
+FOREIGN_MARKERS = [
+    "india", "canada", "mexico", "brazil", "argentina", "colombia", "chile",
+    "united kingdom", "uk", "ireland", "germany", "france", "spain", "portugal",
+    "italy", "poland", "romania", "ukraine", "netherlands", "belgium", "sweden",
+    "norway", "denmark", "switzerland", "austria", "greece", "turkey", "israel",
+    "egypt", "nigeria", "kenya", "south africa", "australia", "new zealand",
+    "singapore", "malaysia", "indonesia", "philippines", "vietnam", "thailand",
+    "japan", "china", "hong kong", "taiwan", "south korea", "pakistan",
+    "bangladesh", "sri lanka", "emea", "apac", "latam", "europe", "asia",
+    "middle east", "africa", "oceania",
+]
+US_MARKERS = [
+    "united states", "u.s.", "u.s.a", " usa", "(usa)", "us-remote", "us remote",
+    "remote us", "remote - us", "remote, us", "anywhere in the us",
+    "colorado", "denver", "boulder", ", co", " co,", "north america", "namer",
+]
+
+
+def _remote_scope(p: JobPosting) -> str:
+    """Return 'us' | 'foreign' | 'unknown' for a remote posting, using the stored
+    scope first, then inferring from the free-text location."""
+    scope = (p.remote_scope or "").strip().lower()
+    if scope in ("us", "usa", "co", "colorado", "north america", "namer"):
+        return "us"
+    if scope in ("global", "worldwide", "anywhere"):
+        return "us"  # worldwide-remote is open to a CO candidate too
+    if scope and scope not in ("", "remote"):
+        # an explicit non-US scope (e.g. "emea", "india")
+        return "foreign" if any(m in scope for m in FOREIGN_MARKERS) else "unknown"
+    loc = (p.location_raw or "").lower()
+    if any(m in loc for m in US_MARKERS):
+        return "us"
+    if any(m in loc for m in FOREIGN_MARKERS):
+        return "foreign"
+    return "unknown"
+
+
 def _location_component(p: JobPosting, allow_hybrid: bool = True) -> float:
     loc = (p.location_raw or "").lower()
     if p.is_remote:
-        scope = (p.remote_scope or "").lower()
-        if scope in ("", "us", "usa", "global", "co", "colorado", "north america"):
-            return 1.0
-        return 0.0
+        scope = _remote_scope(p)
+        if scope == "foreign":
+            return 0.0
+        # 'us' and 'unknown' (plain "Remote" with no foreign marker) both pass:
+        # US-based ATS boards overwhelmingly mean US-remote by default.
+        return 1.0
     if "colorado" in loc or ", co" in loc or loc.strip().endswith(" co") \
             or "denver" in loc or "boulder" in loc or "colorado springs" in loc:
         return 1.0 if not allow_hybrid else 0.9
