@@ -68,6 +68,22 @@ services:
       redis:
         condition: service_healthy
 
+  assist:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.assist
+    restart: unless-stopped
+    environment:
+      JOBOPS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobops}
+      JOBOPS_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - exports:/srv/jobops/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   frontend:
     build: ./frontend
     restart: unless-stopped

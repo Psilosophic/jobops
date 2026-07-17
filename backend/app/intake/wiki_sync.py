@@ -83,6 +83,28 @@ def sync(md_path: str) -> dict:
             s.add(row)
             applied["settings"] += 1
 
+        # Profile Identity -> user_settings["identity"] (feeds manual-assist prefill)
+        identity_map = {
+            "Full name": "full_name", "Preferred name": "preferred_name",
+            "Email address": "email", "Phone number": "phone",
+            "City": "city", "State": "state",
+            "LinkedIn URL": "linkedin", "GitHub URL": "github",
+            "Portfolio URL": "portfolio", "Personal website URL": "portfolio",
+        }
+        identity: dict = {}
+        for section, fields in data.items():
+            if section.endswith("Profile Identity"):
+                for label, key in identity_map.items():
+                    if label in fields:
+                        identity[key] = fields[label]
+        if identity:
+            row = s.exec(select(UserSetting).where(UserSetting.key == "identity")).first() \
+                or UserSetting(key="identity", value={})
+            row.value = {**(row.value or {}), **identity}
+            row.updated_at = datetime.now(timezone.utc)
+            s.add(row)
+            applied["settings"] += 1
+
         for section, fields in data.items():
             if section.endswith("Compensation"):
                 if "Minimum base salary" in fields:

@@ -1,0 +1,8 @@
+FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+WORKDIR /srv/jobops
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+COPY pyproject.toml ./
+RUN pip install -e . && pip install "playwright>=1.47"
+COPY . .
+RUN pip install -e .
+CMD ["celery", "-A", "app.celery_app.celery", "worker", "--loglevel=INFO", "-Q", "assist", "--concurrency=1"]

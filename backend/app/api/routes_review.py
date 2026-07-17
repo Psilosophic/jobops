@@ -12,7 +12,9 @@ from app.models.jobs import JobPosting
 from app.models.profile import ResumeTrack
 from app.models.scoring import ScoringExplanation
 from app.models.sources import Source, SourcePolicy
+from fastapi.responses import FileResponse
 from app.workflow import review as svc
+from app.workflow.manual_assist import build_bookmarklet, build_prefill_map
 from app.workflow.state_machine import Ctx, TransitionError, transition
 
 router = APIRouter(prefix="/review", tags=["review"])
@@ -130,9 +132,14 @@ def submit(app_id: int, session: Session = Depends(get_session)) -> dict:
     """One click: approve + policy-routed next step. Never bypasses policy."""
     app = _app_or_404(session, app_id)
     try:
-        return svc.approve(session, app)
+        next_step = svc.approve(session, app)
     except (svc.ReviewError, TransitionError) as exc:
         raise HTTPException(422, str(exc)) from exc
+    if next_step.get("mode") == "manual_assist":
+        from app.tasks import manual_assist_prefill
+        manual_assist_prefill.delay(app.id)
+        next_step["assist_dispatched"] = True
+    return next_step
 
 
 class OutcomeBody(BaseModel):
@@ -163,3 +170,41 @@ def rescue_blocked(app_id: int, session: Session = Depends(get_session)) -> dict
     transition(session, app, S.queued_for_review, Ctx(human_action=True))
     session.commit()
     return app.model_dump()
+
+
+@router.get("/{app_id}/assist")
+def assist_status(app_id: int, session: Session = Depends(get_session)) -> dict:
+    """Prefill map + bookmarklet + latest headless prefill report/screenshot."""
+    from app.models.applications import ApplicationEvent
+    app = _app_or_404(session, app_id)
+    pm = build_prefill_map(session, app)
+    last = session.exec(
+        select(ApplicationEvent).where(
+            ApplicationEvent.application_id == app_id,
+            ApplicationEvent.event_type == "manual_assist_prefill",
+        ).order_by(ApplicationEvent.created_at.desc())
+    ).first()
+    return {
+        "prefill": pm.as_dict(),
+        "bookmarklet": build_bookmarklet(pm),
+        "report": last.payload if last else None,
+        "screenshot_url": f"/review/{app_id}/assist/screenshot" if last else None,
+    }
+
+
+@router.post("/{app_id}/assist")
+def assist_trigger(app_id: int, session: Session = Depends(get_session)) -> dict:
+    """Manually (re)run the headless prefill for this application."""
+    app = _app_or_404(session, app_id)
+    from app.tasks import manual_assist_prefill
+    manual_assist_prefill.delay(app.id)
+    return {"dispatched": app.id}
+
+
+@router.get("/{app_id}/assist/screenshot")
+def assist_screenshot(app_id: int):
+    from pathlib import Path
+    shot = Path(f"/srv/jobops/exports/assist/app_{app_id}.png")
+    if not shot.exists():
+        raise HTTPException(404, "no screenshot yet")
+    return FileResponse(str(shot), media_type="image/png")

@@ -50,6 +50,16 @@ export default function ReviewQueue() {
     onSuccess: () => { setBanner(""); invalidate(); },
   });
 
+  const { data: assist } = useQuery({
+    queryKey: ["assist", appId],
+    queryFn: () => api.get<any>(`/review/${appId}/assist`),
+    enabled: appId !== null && banner.includes("Manual assist"),
+    refetchInterval: 5000,
+  });
+  const copyBookmarklet = () => {
+    if (assist?.bookmarklet) navigator.clipboard.writeText(assist.bookmarklet);
+  };
+
   const move = useCallback((dir: 1 | -1) => {
     if (!queue?.length) return;
     const idx = queue.findIndex((q) => q.application_id === appId);
@@ -130,9 +140,28 @@ export default function ReviewQueue() {
             </div>
             {submitDisabledReason && <p className="text-xs text-amber-400">{submitDisabledReason}</p>}
             {banner && (
-              <div className="card border-emerald-800 text-sm">
-                {banner}
-                <div className="mt-2 flex gap-2">
+              <div className="card border-emerald-800 text-sm space-y-2">
+                <div>{banner}</div>
+                {banner.includes("Manual assist") && assist && (
+                  <div className="rounded bg-zinc-800/60 p-2 text-xs space-y-2">
+                    <div className="font-medium text-zinc-300">
+                      Prefill ready — {assist.prefill?.fields?.length ?? 0} fields
+                      {assist.report?.error ? " (headless preview failed; use bookmarklet)"
+                        : assist.report ? ` · headless filled ${assist.report.filled?.length ?? 0}` : " · preview running…"}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="btn-secondary" onClick={copyBookmarklet}>Copy prefill bookmarklet</button>
+                      <a className="btn-secondary" href={`/api/review/${appId}/assist/screenshot`} target="_blank" rel="noreferrer">View headless preview</a>
+                    </div>
+                    <div className="text-zinc-500">
+                      Drag the copied text to your bookmarks bar (or paste in console) on the open apply page to fill it in your own browser, attach the resume, review, and submit.
+                    </div>
+                    {assist.prefill?.missing?.length > 0 && (
+                      <div className="text-amber-400">Missing (fill manually): {assist.prefill.missing.join(", ")}</div>
+                    )}
+                  </div>
+                )}
+                <div className="flex gap-2">
                   <button className="btn-primary" onClick={() => confirmMut.mutate(true)}>Confirm submitted</button>
                   <button className="btn-secondary" onClick={() => confirmMut.mutate(false)}>It failed</button>
                 </div>

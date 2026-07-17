@@ -76,3 +76,49 @@ def generate_daily_report() -> dict:
         session.commit()
     log.info("daily_report_generated", date=str(report_date))
     return payload
+
+
+@celery.task(name="app.tasks.manual_assist_prefill", queue="assist")
+def manual_assist_prefill(application_id: int) -> dict:
+    """Headless Playwright prefill + screenshot for an application in
+    manual_assist_in_progress. Policy-gated; never submits."""
+    import asyncio
+    from pathlib import Path
+
+    from app.models.applications import Application, ApplicationEvent
+    from app.models.base import EventActor
+    from app.models.jobs import JobPosting
+    from app.models.ops import PanicState
+    from app.models.sources import SourcePolicy
+    from app.policy.engine import Action, gate
+    from app.workflow.manual_assist import build_prefill_map, fill_form_headless
+
+    with Session(engine) as s:
+        app = s.get(Application, application_id)
+        if app is None:
+            return {"error": "application not found"}
+        posting = s.get(JobPosting, app.posting_id)
+        policy = s.exec(select(SourcePolicy).where(
+            SourcePolicy.source_id == posting.source_id)).first()
+        panic = s.get(PanicState, 1) or PanicState(id=1)
+        decision = gate(Action.BROWSER_ASSIST, policy, panic, posting.source_id)
+        if not decision.allowed:
+            return {"denied": list(decision.reasons)}
+
+        pm = build_prefill_map(s, app)
+        shot_dir = Path("/srv/jobops/exports/assist")
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        shot = str(shot_dir / f"app_{application_id}.png")
+        report = asyncio.run(fill_form_headless(posting.url, pm, shot))
+
+        s.add(ApplicationEvent(
+            application_id=app.id, event_type="manual_assist_prefill",
+            actor=EventActor.system,
+            payload={"filled": report.get("filled"), "skipped": report.get("skipped"),
+                     "uploaded_resume": report.get("uploaded_resume"),
+                     "error": report.get("error"), "screenshot": report.get("screenshot")},
+        ))
+        s.commit()
+    log.info("manual_assist_done", application_id=application_id,
+             filled=len(report.get("filled", [])), error=report.get("error"))
+    return report
