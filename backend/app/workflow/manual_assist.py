@@ -223,72 +223,114 @@ def match_option(value: str, options: list[tuple[str, str]]) -> str | None:
 # --------- Playwright headless filler (optional; runs in the assist container) ----------
 
 async def fill_form_headless(url: str, pm: PrefillMap, screenshot_path: str) -> dict:
-    """Open the apply page headless, fill confidently-matched fields, upload the
-    resume, screenshot. Returns a coverage report. NEVER submits.
+    """Open the apply page headless, fill confidently-matched fields, upload files,
+    screenshot. If the landing page is a job DESCRIPTION with no form (common on
+    branded career sites like Datadog/Twilio), follow the Apply link once and
+    retry. NEVER submits.
 
     Imported lazily so the API/worker images don't need Playwright installed.
     """
     from playwright.async_api import async_playwright  # noqa: PLC0415
 
     report: dict = {"filled": [], "skipped": [], "uploaded_resume": False,
+                    "uploaded_cover_letter": False, "clicked_apply": False,
                     "screenshot": screenshot_path, "error": None}
+
+    async def scan_and_fill(page) -> int:
+        filled = 0
+        controls = await page.query_selector_all("input, textarea, select")
+        for f in pm.fields:
+            if f.purpose in report["filled"]:
+                continue
+            rgx = re.compile(f.match_regex, re.I)
+            for el in controls:
+                try:
+                    tag = (await el.evaluate("e => e.tagName")).lower()
+                    typ = (await el.get_attribute("type") or "").lower()
+                    if typ in ("hidden", "file", "password", "submit", "button"):
+                        continue
+                    haystack = " ".join(filter(None, [
+                        await el.get_attribute("name"),
+                        await el.get_attribute("id"),
+                        await el.get_attribute("placeholder"),
+                        await el.get_attribute("aria-label"),
+                    ])).lower()
+                    if not rgx.search(haystack):
+                        continue
+                    if tag == "select":
+                        opts = await el.evaluate(
+                            "e => Array.from(e.options).map(o => ({v: o.value, t: o.textContent}))"
+                        )
+                        pick = match_option(f.value, [(o["v"], o["t"]) for o in opts])
+                        if pick is None:
+                            continue
+                        await el.select_option(value=pick)
+                    else:
+                        await el.fill(f.value)
+                    report["filled"].append(f.purpose)
+                    filled += 1
+                    break
+                except Exception:  # noqa: BLE001,PERF203
+                    continue
+        return filled
+
+    async def upload_files(page) -> None:
+        file_inputs = await page.query_selector_all('input[type="file"]')
+        cover_rgx = re.compile(r"cover", re.I)
+        for fi in file_inputs:
+            haystack = " ".join(filter(None, [
+                await fi.get_attribute("name"), await fi.get_attribute("id"),
+                await fi.get_attribute("aria-label"),
+            ]))
+            is_cover = bool(cover_rgx.search(haystack))
+            try:
+                if is_cover and pm.cover_letter_path:
+                    await fi.set_input_files(pm.cover_letter_path)
+                    report["uploaded_cover_letter"] = True
+                elif not is_cover and pm.resume_path and not report["uploaded_resume"]:
+                    await fi.set_input_files(pm.resume_path)
+                    report["uploaded_resume"] = True
+            except Exception as exc:  # noqa: BLE001
+                report["skipped"].append(f"file_upload:{exc}")
+
+    async def click_apply(page) -> bool:
+        """Follow an Apply link/button on a description-only page. One hop max;
+        never clicks anything that could submit (forms have no fields filled yet)."""
+        candidates = await page.query_selector_all(
+            "a[href*='apply' i], a[href*='#app' i], button, a[role='button']")
+        for el in candidates:
+            try:
+                text = ((await el.text_content()) or "").strip().lower()
+                if not re.fullmatch(r"apply( now| for this job| here)?!?", text):
+                    continue
+                async with page.expect_navigation(wait_until="domcontentloaded",
+                                                  timeout=15000) as _nav:
+                    await el.click()
+                return True
+            except Exception:  # noqa: BLE001,PERF203
+                try:
+                    # SPA apply buttons may not navigate; give the form a beat
+                    await page.wait_for_timeout(2500)
+                    return True
+                except Exception:  # noqa: BLE001
+                    continue
+        return False
+
     try:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             page = await browser.new_page(viewport={"width": 1280, "height": 1600})
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            controls = await page.query_selector_all("input, textarea, select")
+            await page.wait_for_timeout(1500)
+            n = await scan_and_fill(page)
+            if n < 2 and await click_apply(page):
+                report["clicked_apply"] = True
+                await page.wait_for_timeout(2000)
+                await scan_and_fill(page)
             for f in pm.fields:
-                rgx = re.compile(f.match_regex, re.I)
-                done = False
-                for el in controls:
-                    try:
-                        tag = (await el.evaluate("e => e.tagName")).lower()
-                        typ = (await el.get_attribute("type") or "").lower()
-                        if typ in ("hidden", "file", "password", "submit", "button"):
-                            continue
-                        haystack = " ".join(filter(None, [
-                            await el.get_attribute("name"),
-                            await el.get_attribute("id"),
-                            await el.get_attribute("placeholder"),
-                            await el.get_attribute("aria-label"),
-                        ])).lower()
-                        if not rgx.search(haystack):
-                            continue
-                        if tag == "select":
-                            opts = await el.evaluate(
-                                "e => Array.from(e.options).map(o => ({v: o.value, t: o.textContent}))"
-                            )
-                            pick = match_option(f.value, [(o["v"], o["t"]) for o in opts])
-                            if pick is None:
-                                continue
-                            await el.select_option(value=pick)
-                        else:
-                            await el.fill(f.value)
-                        report["filled"].append(f.purpose)
-                        done = True
-                        break
-                    except Exception:  # noqa: BLE001,PERF203
-                        continue
-                if not done:
+                if f.purpose not in report["filled"]:
                     report["skipped"].append(f.purpose)
-            file_inputs = await page.query_selector_all('input[type="file"]')
-            cover_rgx = re.compile(r"cover", re.I)
-            for fi in file_inputs:
-                haystack = " ".join(filter(None, [
-                    await fi.get_attribute("name"), await fi.get_attribute("id"),
-                    await fi.get_attribute("aria-label"),
-                ]))
-                is_cover = bool(cover_rgx.search(haystack))
-                try:
-                    if is_cover and pm.cover_letter_path:
-                        await fi.set_input_files(pm.cover_letter_path)
-                        report["uploaded_cover_letter"] = True
-                    elif not is_cover and pm.resume_path and not report.get("uploaded_resume"):
-                        await fi.set_input_files(pm.resume_path)
-                        report["uploaded_resume"] = True
-                except Exception as exc:  # noqa: BLE001
-                    report["skipped"].append(f"file_upload:{exc}")
+            await upload_files(page)
             await page.screenshot(path=screenshot_path, full_page=True)
             await browser.close()
     except Exception as exc:  # noqa: BLE001
