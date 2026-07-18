@@ -87,7 +87,7 @@ def sync(md_path: str) -> dict:
         identity_map = {
             "Full name": "full_name", "Preferred name": "preferred_name",
             "Email address": "email", "Phone number": "phone",
-            "City": "city", "State": "state",
+            "City": "city", "State": "state", "Zip code": "zip",
             "LinkedIn URL": "linkedin", "GitHub URL": "github",
             "Portfolio URL": "portfolio", "Personal website URL": "portfolio",
         }
@@ -98,6 +98,19 @@ def sync(md_path: str) -> dict:
                     if label in fields:
                         identity[key] = fields[label]
         if identity:
+            full = identity.get("full_name", "")
+            tokens = full.split()
+            if len(tokens) >= 2:
+                identity.setdefault("first_name", tokens[0])
+                identity.setdefault("last_name", tokens[-1])   # right token = surname
+            if identity.get("first_name") and identity.get("last_name"):
+                identity.setdefault(
+                    "display_name",
+                    f"{identity['first_name']} {identity['last_name']}")
+            loc_bits = [identity.get("city"), identity.get("state"), identity.get("zip")]
+            if identity.get("city"):
+                identity.setdefault("location", ", ".join(
+                    b for b in loc_bits[:2] if b) + (f" {loc_bits[2]}" if loc_bits[2] else ""))
             row = s.exec(select(UserSetting).where(UserSetting.key == "identity")).first() \
                 or UserSetting(key="identity", value={})
             row.value = {**(row.value or {}), **identity}

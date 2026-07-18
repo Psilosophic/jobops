@@ -122,3 +122,9 @@ def manual_assist_prefill(application_id: int) -> dict:
     log.info("manual_assist_done", application_id=application_id,
              filled=len(report.get("filled", [])), error=report.get("error"))
     return report
+
+
+@celery.task(name="app.tasks.email_daily_report")
+def email_daily_report() -> dict:
+    from app.reporting.emailer import send_morning_report
+    return send_morning_report()

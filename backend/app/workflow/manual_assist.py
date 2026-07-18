@@ -40,6 +40,7 @@ FIELD_MATCHERS: list[tuple[str, str]] = [
     ("sponsorship_now", r"sponsor|visa"),
     ("remote_pref", r"remote|hybrid|onsite|work\s*setup|work\s*location\s*pref"),
     ("salary_expectation", r"salary|compensation|desired\s*pay|expected\s*pay"),
+    ("cover_letter", r"cover\s*letter"),
 ]
 
 # answer-bank names that satisfy the screener purposes above
@@ -58,6 +59,7 @@ class PrefillField:
 class PrefillMap:
     fields: list[PrefillField] = field(default_factory=list)
     resume_path: str | None = None
+    cover_letter_path: str | None = None
     missing: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -68,6 +70,7 @@ class PrefillMap:
                 for f in self.fields
             ],
             "resume_path": self.resume_path,
+            "cover_letter_path": self.cover_letter_path,
             "missing": self.missing,
         }
 
@@ -90,12 +93,18 @@ def build_prefill_map(session: Session, app: Application) -> PrefillMap:
         else:
             pm.missing.append(purpose)
 
-    full = ident.get("full_name") or ident.get("name")
+    legal = ident.get("full_name") or ident.get("name")
     first = ident.get("first_name")
     last = ident.get("last_name")
-    if full and not (first and last) and " " in full:
-        first, last = full.split(" ", 1)
-    add("full_name", full, "identity")
+    if legal and not (first and last):
+        # Split from the RIGHT: middle names are far more common than
+        # unhyphenated compound surnames. "Scott Wesley Shelton" -> Scott / Shelton.
+        tokens = legal.split()
+        if len(tokens) >= 2:
+            first = first or tokens[0]
+            last = last or tokens[-1]
+    display = ident.get("display_name") or (f"{first} {last}" if first and last else legal)
+    add("full_name", display, "identity")
     add("first_name", first, "identity")
     add("last_name", last, "identity")
     add("email", ident.get("email"), "identity")
@@ -119,10 +128,15 @@ def build_prefill_map(session: Session, app: Application) -> PrefillMap:
         add(name, row.get("text") if row and row.get("status") != "missing" else None,
             "answer_bank")
 
+    if packet and packet.snapshot.get("cover_note"):
+        add("cover_letter", packet.snapshot["cover_note"], "packet")
+
     if packet and packet.snapshot.get("resume_file"):
         pm.resume_path = packet.snapshot["resume_file"]
     else:
         pm.missing.append("resume_file")
+    if packet and packet.snapshot.get("cover_letter_file"):
+        pm.cover_letter_path = packet.snapshot["cover_letter_file"]
     return pm
 
 
@@ -142,7 +156,15 @@ def build_bookmarklet(pm: PrefillMap) -> str:
         "R.forEach(function(r){var re=new RegExp(r.re,'i');"
         "for(var i=0;i<els.length;i++){var e=els[i];if(e.dataset.jobopsFilled)continue;"
         "if(e.type==='hidden'||e.type==='password'||e.type==='file')continue;"
-        "if(re.test(lbl(e))){e.focus();e.value=r.val;"
+        "if(re.test(lbl(e))){e.focus();"
+        "if(e.tagName==='SELECT'){var best=null,bl=1e9,v=r.val.toLowerCase();"
+        "for(var j=0;j<e.options.length;j++){var ot=e.options[j].textContent.toLowerCase().trim();"
+        "if(!ot||ot.indexOf('select')===0||ot.indexOf('choose')===0)continue;"
+        "if(ot===v){best=j;break;}"
+        "if((v.indexOf('yes')===0&&ot.indexOf('yes')===0)||(v.indexOf('no')===0&&ot.indexOf('no')===0)"
+        "||ot.indexOf(v)>-1||v.indexOf(ot)>-1){if(ot.length<bl){best=j;bl=ot.length;}}}"
+        "if(best===null)continue;e.selectedIndex=best;}"
+        "else{e.value=r.val;}"
         "e.dispatchEvent(new Event('input',{bubbles:true}));"
         "e.dispatchEvent(new Event('change',{bubbles:true}));"
         "e.dataset.jobopsFilled='1';e.style.outline='2px solid #10b981';n++;break;}}});"
@@ -150,6 +172,52 @@ def build_bookmarklet(pm: PrefillMap) -> str:
         "})();"
     )
     return "javascript:" + js
+
+
+_NORM_RE = re.compile(r"[^a-z0-9 ]+")
+
+
+def _norm(t: str) -> str:
+    return _NORM_RE.sub(" ", (t or "").lower()).strip()
+
+
+def match_option(value: str, options: list[tuple[str, str]]) -> str | None:
+    """Pick the best <option> for a desired value. options = [(value_attr, text)].
+    Rules, in order: exact normalized text match; yes/no prefix mapping (a value
+    starting 'yes'/'no' selects the option starting 'yes'/'no'); desired value
+    contained in option text (or vice versa); best token overlap >= 0.5.
+    Returns the option's value attribute, or None (never guesses blind)."""
+    v = _norm(value)
+    if not v:
+        return None
+    cands = [(val, _norm(txt)) for val, txt in options
+             if _norm(txt) not in ("", "select", "select an option", "please select",
+                                   "choose", "choose an option", "select one")]
+    for val, txt in cands:
+        if txt == v:
+            return val
+    for lead in ("yes", "no"):
+        if v.startswith(lead):
+            leads = [c for c in cands if c[1].startswith(lead)]
+            if len(leads) == 1:
+                return leads[0][0]
+            # prefer the shortest option that starts with the same lead ("Yes" over
+            # "Yes, with conditions") when several exist
+            if leads:
+                return min(leads, key=lambda c: len(c[1]))[0]
+    for val, txt in cands:
+        if v in txt or txt in v:
+            return val
+    vt = set(v.split())
+    best, best_score = None, 0.0
+    for val, txt in cands:
+        tt = set(txt.split())
+        if not tt:
+            continue
+        score = len(vt & tt) / len(vt | tt)
+        if score > best_score:
+            best, best_score = val, score
+    return best if best_score >= 0.5 else None
 
 
 # --------- Playwright headless filler (optional; runs in the assist container) ----------
@@ -188,7 +256,13 @@ async def fill_form_headless(url: str, pm: PrefillMap, screenshot_path: str) -> 
                         if not rgx.search(haystack):
                             continue
                         if tag == "select":
-                            await el.select_option(label=re.compile(f.value, re.I))
+                            opts = await el.evaluate(
+                                "e => Array.from(e.options).map(o => ({v: o.value, t: o.textContent}))"
+                            )
+                            pick = match_option(f.value, [(o["v"], o["t"]) for o in opts])
+                            if pick is None:
+                                continue
+                            await el.select_option(value=pick)
                         else:
                             await el.fill(f.value)
                         report["filled"].append(f.purpose)
@@ -198,14 +272,23 @@ async def fill_form_headless(url: str, pm: PrefillMap, screenshot_path: str) -> 
                         continue
                 if not done:
                     report["skipped"].append(f.purpose)
-            if pm.resume_path:
-                file_input = await page.query_selector('input[type="file"]')
-                if file_input:
-                    try:
-                        await file_input.set_input_files(pm.resume_path)
+            file_inputs = await page.query_selector_all('input[type="file"]')
+            cover_rgx = re.compile(r"cover", re.I)
+            for fi in file_inputs:
+                haystack = " ".join(filter(None, [
+                    await fi.get_attribute("name"), await fi.get_attribute("id"),
+                    await fi.get_attribute("aria-label"),
+                ]))
+                is_cover = bool(cover_rgx.search(haystack))
+                try:
+                    if is_cover and pm.cover_letter_path:
+                        await fi.set_input_files(pm.cover_letter_path)
+                        report["uploaded_cover_letter"] = True
+                    elif not is_cover and pm.resume_path and not report.get("uploaded_resume"):
+                        await fi.set_input_files(pm.resume_path)
                         report["uploaded_resume"] = True
-                    except Exception as exc:  # noqa: BLE001
-                        report["skipped"].append(f"resume_upload:{exc}")
+                except Exception as exc:  # noqa: BLE001
+                    report["skipped"].append(f"file_upload:{exc}")
             await page.screenshot(path=screenshot_path, full_page=True)
             await browser.close()
     except Exception as exc:  # noqa: BLE001

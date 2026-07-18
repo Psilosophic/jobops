@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     high_volume_daily_submit_alert: int = 25
     policy_review_stale_days: int = 90
 
+    # SMTP for the morning report email (operator sets password in .env on host)
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+    smtp_user: str = ""
+    smtp_password: str = ""
+    report_email_to: str = ""
+
     log_level: str = "INFO"
 
 

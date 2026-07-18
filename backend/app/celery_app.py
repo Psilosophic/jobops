@@ -22,6 +22,10 @@ celery.conf.update(
             "task": "app.tasks.generate_daily_report",
             "schedule": crontab(hour=settings.report_generation_hour_local, minute=0),
         },
+        "email-daily-report": {
+            "task": "app.tasks.email_daily_report",
+            "schedule": crontab(hour=settings.report_generation_hour_local, minute=20),
+        },
     },
 )
 celery.autodiscover_tasks(["app"])

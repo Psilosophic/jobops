@@ -16,7 +16,9 @@ from app.models.ops import PanicState
 from app.models.profile import (
     AnswerBankItem, AnswerBankVariant, Resume, ResumeTrack, ResumeVersion,
 )
+from app.models.ops import UserSetting
 from app.models.scoring import ScoringExplanation
+from app.workflow import cover_letter as cl
 
 # The standard screener set every packet pre-answers (job-specific questions are
 # merged in by the manual-assist layer in Phase 4).
@@ -114,6 +116,22 @@ def build_packet(session: Session, app: Application) -> tuple[ApplicationPacket,
             "user_edited": False, "status": "prefilled",
         })
 
+    # --- cover letter (generic template, role/company interpolated) ---
+    emp_for_cover = session.get(Employer, posting.employer_id) if posting.employer_id else None
+    ident_row = session.exec(select(UserSetting).where(UserSetting.key == "identity")).first()
+    identity = (ident_row.value or {}) if ident_row else {}
+    cover_text = cl.render(
+        session, posting.title,
+        emp_for_cover.canonical_name if emp_for_cover else "",
+        track.slug if track else None, identity,
+    )
+    cover_file = None
+    try:
+        cover_file = cl.write_docx(
+            cover_text, f"/srv/jobops/exports/cover/app_{app.id}.docx")
+    except Exception:  # noqa: BLE001 — docx generation optional (e.g. dep missing in tests)
+        cover_file = None
+
     last = session.exec(
         select(ApplicationPacket).where(ApplicationPacket.application_id == app.id)
         .order_by(ApplicationPacket.version_no.desc())
@@ -127,7 +145,8 @@ def build_packet(session: Session, app: Application) -> tuple[ApplicationPacket,
             "track_scores": explanation.track_scores if explanation else {},
             "resume_version_id": resume_version.id if resume_version else None,
             "resume_file": resume_version.file_path if resume_version else None,
-            "summary": "", "cover_note": "",
+            "summary": "", "cover_note": cover_text,
+            "cover_letter_file": cover_file,
             "answers": answers,
             "requires_review": True,  # everything starts human-reviewed
             "has_requires_review_answers": requires_review,
