@@ -232,6 +232,25 @@ async def fill_form_headless(url: str, pm: PrefillMap, screenshot_path: str) -> 
     """
     from playwright.async_api import async_playwright  # noqa: PLC0415
 
+    _HAYSTACK_JS = """
+    (e) => {
+      let t = [e.name, e.id, e.placeholder, e.getAttribute('aria-label')];
+      if (e.labels) for (const l of e.labels) t.push(l.textContent);
+      const ab = e.getAttribute('aria-labelledby');
+      if (ab) ab.split(/\\s+/).forEach(id => {
+        const n = document.getElementById(id); if (n) t.push(n.textContent);
+      });
+      // Greenhouse renders the question in a sibling/ancestor label or a
+      // preceding element; walk up a few levels and grab label-ish text.
+      let p = e.parentElement, hops = 0;
+      while (p && hops < 4) {
+        const lab = p.querySelector('label'); if (lab) t.push(lab.textContent);
+        hops++; p = p.parentElement;
+      }
+      return t.filter(Boolean).join(' ').toLowerCase();
+    }
+    """
+
     report: dict = {"filled": [], "skipped": [], "uploaded_resume": False,
                     "uploaded_cover_letter": False, "clicked_apply": False,
                     "screenshot": screenshot_path, "error": None}
@@ -249,12 +268,7 @@ async def fill_form_headless(url: str, pm: PrefillMap, screenshot_path: str) -> 
                     typ = (await el.get_attribute("type") or "").lower()
                     if typ in ("hidden", "file", "password", "submit", "button"):
                         continue
-                    haystack = " ".join(filter(None, [
-                        await el.get_attribute("name"),
-                        await el.get_attribute("id"),
-                        await el.get_attribute("placeholder"),
-                        await el.get_attribute("aria-label"),
-                    ])).lower()
+                    haystack = await el.evaluate(_HAYSTACK_JS)
                     if not rgx.search(haystack):
                         continue
                     if tag == "select":
@@ -278,10 +292,7 @@ async def fill_form_headless(url: str, pm: PrefillMap, screenshot_path: str) -> 
         file_inputs = await page.query_selector_all('input[type="file"]')
         cover_rgx = re.compile(r"cover", re.I)
         for fi in file_inputs:
-            haystack = " ".join(filter(None, [
-                await fi.get_attribute("name"), await fi.get_attribute("id"),
-                await fi.get_attribute("aria-label"),
-            ]))
+            haystack = await fi.evaluate(_HAYSTACK_JS)
             is_cover = bool(cover_rgx.search(haystack))
             try:
                 if is_cover and pm.cover_letter_path:
